@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  background-color: #ffffff !important;
+  color: #37352f !important;
+  color-scheme: light !important;
+}
+
+body {
+  margin: 0;
+  background-color: #ffffff !important;
+}
