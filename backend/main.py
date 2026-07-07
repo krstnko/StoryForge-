@@ -26,8 +26,8 @@ except Exception as e:
     print(f"CONNECTION ERROR К NEO4J: {e}")
 
 #--- PUT YOUR OWN API KEY---
-genai.configure(api_key="GEMINI API KEY")
-model = genai.GenerativeModel('gemini-flash-latest')
+genai.configure(api_key="YOUR_API_KEY`")
+model = genai.GenerativeModel('gemini-3.1-pro-preview')
 
 class AuditRequest(BaseModel):
     chapter_text: str
@@ -38,7 +38,8 @@ class MasterCommitRequest(BaseModel):
 
 class GenerateRequest(BaseModel):
     prompt: str
-    entities: list    
+    entities: list   
+    style_reference: str = "" 
 
 
 @app.post("/audit")
@@ -46,21 +47,43 @@ async def audit_chapter(payload: AuditRequest):
     lore_context = ""
     try:
         with driver.session() as session:
-            query = """
-            MATCH (e:Entity)
-            OPTIONAL MATCH (e)-[:PARTICIPATED_IN]->(ev:Event)
-            OPTIONAL MATCH (e)-[:HAS_TRAIT]->(t:Trait)
-            RETURN e.name as name, e.type as type, e.appearance as appearance, 
-                   collect(DISTINCT ev.desc) as history, 
-                   collect(DISTINCT t.desc) as traits
-            """
-            result = session.run(query)
-            for record in result:
-                name = record["name"]
-                history = " ".join(record["history"][-3:]) if record["history"] else "" 
-                traits = ", ".join(record["traits"]) if record["traits"] else ""
-                lore_context += f"Name: {name} | Traits: {traits} | Recent History: {history}\n"
-    except Exception: pass
+            names_result = session.run("MATCH (e:Entity) RETURN e.name as name")
+            known_names = [r["name"] for r in names_result]
+            active_names = [name for name in known_names if name.lower() in payload.chapter_text.lower()]
+            
+            print(f"Active entities detected: {active_names}")
+            
+            if active_names:
+                profiles_query = """
+                MATCH (e:Entity) WHERE e.name IN $names
+                OPTIONAL MATCH (e)-[:HAS_TRAIT]->(t:Trait)
+                RETURN e.name as name, e.appearance as appearance, e.gender as gender,
+                       collect(DISTINCT t.desc) as traits
+                """
+                p_result = session.run(profiles_query, names=active_names)
+                
+                profiles_text = "CHARACTER PROFILES:\n"
+                for r in p_result:
+                    traits = ", ".join(r["traits"]) if r["traits"] else "None"
+                    profiles_text += f"- {r['name']} ({r['gender']}): {r['appearance']}. Traits: {traits}\n"
+                
+           
+                timeline_query = """
+                MATCH (e:Entity)-[:PARTICIPATED_IN]->(ev:Event)
+                WHERE e.name IN $names
+                RETURN DISTINCT ev.desc as desc, ev.chapter as chapter, ev.timestamp as ts
+                ORDER BY ev.timestamp ASC
+                """
+                t_result = session.run(timeline_query, names=active_names)
+                
+                timeline_text = "\nRELEVANT STORY TIMELINE:\n"
+                for r in t_result:
+                    timeline_text += f"- [{r['chapter']}] {r['desc']}\n"
+                
+                lore_context = profiles_text + timeline_text
+
+    except Exception as e: 
+        print(f"Lore extraction error: {e}")
 
     prompt = f"""
     You are a story editor. Analyze the text against the WORLD LORE.
@@ -124,18 +147,30 @@ async def commit_all(payload: MasterCommitRequest):
             for fact in payload.changes:
                 ftype = fact.get('type', 'event')
                 
-                # --- Characters and locations ---
-                if ftype in ['character_ready', 'new_character', 'location']:
-                    entity_type = 'location' if ftype == 'location' else 'character'
+                # --- locations ---
+                if ftype == 'location':
+                    session.run("""
+                    MERGE (e:Entity {name: $name, type: 'location'})
+                    SET e.appearance = $desc
+                    """, name=fact.get('title', 'Unknown').strip(), desc=fact.get('desc', ''))
+
+
+                # --- Characters ---
+                elif ftype in ['character_ready', 'new_character']:
                     session.run("""
                     MERGE (e:Entity {name: $name})
-                    SET e.type = $type, e.gender = $gender, e.appearance = $appearance, e.speech = $speech
-                    """, name=fact.get('title', 'Unknown'), type=entity_type, gender=fact.get('gender', ''), appearance=fact.get('appearance', ''), speech=fact.get('speech', ''))
+                    SET e.type = 'character', e.gender = $gender, e.appearance = $appearance, e.speech = $speech
+                    """, name=fact.get('title', 'Unknown'), 
+                         gender=fact.get('gender', ''), 
+                         appearance=fact.get('appearance', ''), 
+                         speech=fact.get('speech', ''))
                 
                 # --- Events ---
-                if ftype == 'event':
-                    session.run("MERGE (ev:Event {desc: $desc, chapter: $chapter})", desc=fact.get('desc', ''), chapter=payload.chapter_title)
-                    
+                elif  ftype == 'event':
+                    session.run("""MERGE (ev:Event {desc: $desc, chapter: $chapter})
+                    ON CREATE SET ev.timestamp = timestamp()
+                    """, desc=fact.get('desc'), chapter=payload.chapter_title)
+
                     participants = fact.get('participants', [])
                     if isinstance(participants, str): participants = [p.strip() for p in participants.split(',')]
                     
@@ -152,11 +187,11 @@ async def commit_all(payload: MasterCommitRequest):
                     location = fact.get('location', '')
                     if location and location != 'Unknown':
                         session.run("""
-                        MERGE (loc:Entity {name: $name})
+                        MERGE (loc:Entity {name: $loc_name})
                         ON CREATE SET loc.type = 'location'
                         MATCH (ev:Event {desc: $desc, chapter: $chapter})
-                        MERGE (loc)-[:PARTICIPATED_IN]->(ev)
-                        """, name=location.strip(), desc=fact.get('desc', ''), chapter=payload.chapter_title)
+                        MERGE (ev)-[:HAPPENED_AT]->(loc)
+                        """, loc_name=location.strip(), desc=fact.get('desc'), chapter=payload.chapter_title)
                 
                 elif ftype == 'trait':
                     person_name = fact.get('title')
@@ -168,6 +203,22 @@ async def commit_all(payload: MasterCommitRequest):
                         MERGE (e)-[:HAS_TRAIT]->(t)
                         """, name=person_name, desc=fact.get('desc', ''))
 
+                elif ftype == 'contradiction':
+                    session.run("""
+                    MERGE (err:Contradiction {desc: $desc, chapter: $chapter})
+                    ON CREATE SET err.timestamp = timestamp()
+                    """, desc=fact.get('desc'), chapter=payload.chapter_title)
+                    
+                    participants = fact.get('participants', [])
+                    if isinstance(participants, str): participants = [p.strip() for p in participants.split(',')]
+                    for person in participants:
+                        if person:
+                            session.run("""
+                            MERGE (e:Entity {name: $name})
+                            MATCH (err:Contradiction {desc: $desc, chapter: $chapter})
+                            MERGE (err)-[:ABOUT]->(e)
+                            """, name=person.strip(), desc=fact.get('desc'), chapter=payload.chapter_title)
+        
         return {"status": "success"}
     except Exception as e:
         print(f"Commit error: {e}")
@@ -201,12 +252,24 @@ async def get_library():
 @app.get("/entity_history/{name}")
 async def get_entity_history(name: str):
     with driver.session() as session:
-        ev_result = session.run("MATCH (e:Entity {name: $name})-[:PARTICIPATED_IN]->(ev:Event) RETURN ev.desc as desc, ev.chapter as chapter", name=name)
+        ev_result = session.run("""
+        MATCH (e:Entity {name: $name})-[:PARTICIPATED_IN]->(ev:Event) 
+        RETURN ev.desc as desc, ev.chapter as chapter 
+        ORDER BY ev.timestamp ASC
+        """, name=name)
         history = [{"chapter": r["chapter"], "desc": r["desc"]} for r in ev_result]
-        
+                
+        loc_result = session.run("""
+        MATCH (ev:Event)-[:HAPPENED_AT]->(loc:Entity {name: $name})
+        RETURN ev.desc as desc, ev.chapter as chapter 
+        ORDER BY ev.timestamp ASC
+        """, name=name)
+        for r in loc_result:
+            history.append({"chapter": r["chapter"], "desc": r["desc"]})
+            
         t_result = session.run("MATCH (e:Entity {name: $name})-[:HAS_TRAIT]->(t:Trait) RETURN t.desc as desc", name=name)
         traits = [{"desc": r["desc"]} for r in t_result]
-        
+
         return {"history": history, "traits": traits}
         
 
@@ -234,14 +297,18 @@ async def generate_scene(payload: GenerateRequest):
                 MATCH (e:Entity)
                 WHERE e.name IN $names
                 OPTIONAL MATCH (e)-[:PARTICIPATED_IN]->(ev:Event)
-                RETURN e.name as name, e.type as type, e.appearance as appearance, collect(ev.desc) as history
+                OPTIONAL MATCH (e)-[:HAS_TRAIT]->(t:Trait)
+                RETURN e.name as name, e.type as type, e.appearance as appearance, 
+                       collect(DISTINCT ev.desc) as history,
+                       collect(DISTINCT t.desc) as traits
                 """
                 result_lore = session.run(query_lore, names=payload.entities)
                 for r in result_lore:
                     name = r["name"]
                     appr = r["appearance"] or "No description."
                     hist = " ".join(r["history"]) if r["history"] else "No past events."
-                    lore_context += f"- {name}: {appr} | History: {hist}\n"
+                    traits = ", ".join(r["traits"]) if r["traits"] else "No traits."
+                    lore_context += f"- {name}: {appr} | Traits/Behavior: {traits} | Recent: {hist}\n"
             
             # last 10 global events
             query_story = """
@@ -278,6 +345,8 @@ async def generate_scene(payload: GenerateRequest):
     2. Focus on show, don't tell.
     3. Return ONLY the story text. No introductions, no meta-text like "Here is your scene".
     """
+    if payload.style_reference:
+        ai_prompt += f"\n\n[STYLE REFERENCE]\nMatch the tone of this text:\n{payload.style_reference}"
     
     try:
         response = model.generate_content(ai_prompt)

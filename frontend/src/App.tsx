@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, FileText, Sparkles, Check, User, AlertTriangle, X, Book, Library, Edit2, Save, Wand2 } from "lucide-react";
+import { Plus, FileText, Sparkles, Check, User, AlertTriangle, X, Book, Library, Edit2, Save, Wand2, MapPin } from "lucide-react";
 import WorldLibrary from "./Library";
 import Generator from "./Generator"; 
 type Chapter = {
@@ -79,14 +79,10 @@ export default function App() {
   };
 
   const handleMasterCommit = async () => {
+    if (staged.length === 0) return;
     const unresolvedErrors = staged.filter(s => s.type === 'contradiction');
-    if (unresolvedErrors.length > 0) {
-      const proceed = window.confirm(`You have ${unresolvedErrors.length} unresolved logic error(s). Are you sure you want to commit the rest?`);
-      if (!proceed) return;
-    }
-
+    
     const readyToCommit = staged.filter(s => 
-      s.type !== 'contradiction' && 
       !(s.type === 'new_character' && s.desc === 'Needs setup')
     );
 
@@ -223,9 +219,18 @@ export default function App() {
                     </div>
 
                     <div className="flex gap-3">
-                    <div className={`mt-0.5 ${s.type === 'contradiction' ? 'text-orange-500' : s.type === 'trait' ? 'text-purple-500' : s.type.includes('character') ? 'text-blue-500' : 'text-emerald-500'}`}>
-                      {s.type === 'contradiction' ? <AlertTriangle size={16}/> : s.type === 'trait' ? <Sparkles size={16}/> : <User size={16}/>}
-                    </div>
+                    <div className={`mt-0.5 ${
+                      s.type === 'contradiction' ? 'text-orange-500' : 
+                      s.type === 'trait' ? 'text-purple-500' : 
+                      s.type === 'location' ? 'text-emerald-500' :
+                      s.type.includes('character') ? 'text-blue-500' : 'text-emerald-500'}`}>
+                      {
+                      s.type === 'contradiction' ? <AlertTriangle size={16}/> : 
+                      s.type === 'trait' ? <Sparkles size={16}/> : 
+                      s.type === 'location' ? <MapPin size={16}/> :
+                      <User size={16}/>
+                      }
+                      </div>
                       <div className="flex-1">
                         <div className="text-[13px] font-bold text-[#37352f] flex items-center gap-2">
                           {s.title}
@@ -233,63 +238,68 @@ export default function App() {
                           {s.type === 'new_character' && s.desc === 'Configured' && <span className="text-[9px] bg-emerald-100 text-emerald-600 px-1.5 py-0.5 rounded uppercase">Configured</span>}
                           {s.type === 'trait' && <span className="text-[9px] bg-purple-100 text-purple-600 px-1.5 py-0.5 rounded uppercase">Fact / Trait</span>}
                         </div>
+                        
                         {s.type === 'event' && editingId !== s.id && (
                           <div className="flex flex-col gap-0.5 mt-1">
                             {s.participants && s.participants.length > 0 && <span className="text-[10px] font-bold text-blue-500/70 uppercase">Characters: {s.participants.join(', ')}</span>}
                             {s.location && <span className="text-[10px] font-bold text-emerald-500/70 uppercase">Location: {s.location}</span>}
                           </div>
                         )}
-                        
-                        {editingId === s.id ? (
+
+                    {editingId === s.id ? (
                           <div className="mt-2 space-y-3 bg-[#F7F7F5] p-3 rounded-lg border border-[#EBEBEB]">
                             
-                       
                             <div>
-                              <label className="text-[9px] font-bold uppercase opacity-50 block mb-1">Event Description</label>
+                              <label className="text-[9px] font-bold uppercase opacity-50 block mb-1">
+                                {s.type === 'location' ? 'Location Description' : 'Event Description'}
+                              </label>
                               <textarea className="w-full text-[12px] p-2 border border-[#EBEBEB] rounded bg-white outline-none focus:border-blue-300 resize-none" rows={2} value={editForm.desc} onChange={(e) => setEditForm({...editForm, desc: e.target.value})} autoFocus />
                             </div>
-                            
-                            
-                            <div>
-                              <label className="text-[9px] font-bold uppercase opacity-50 block mb-1">Link Characters (from Library)</label>
-                              <div className="flex flex-wrap gap-1.5">
-                               
-                                {library.filter(e => e.type === 'character').map(char => {
-                                  const isSelected = editForm.participants.includes(char.name);
-                                  return (
-                                    <button 
-                                      key={char.name}
-                                      onClick={() => toggleParticipant(char.name)}
-                                      className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${isSelected ? 'bg-blue-100 border-blue-300 text-blue-700 font-bold' : 'bg-white border-[#EBEBEB] text-[#37352f]/60 hover:bg-gray-50'}`}
-                                    >
-                                      {char.name}
-                                    </button>
-                                  );
-                                })}
-                                {library.filter(e => e.type === 'character').length === 0 && (
-                                  <span className="text-[10px] italic text-gray-400">Library is empty. Commit characters first.</span>
-                                )}
-                              </div>
-                            </div>
 
-                         
-                            <div>
-                              <label className="text-[9px] font-bold uppercase opacity-50 block mb-1">Link Location (Optional)</label>
-                              <select 
-                                className="w-full text-[12px] p-1.5 border border-[#EBEBEB] rounded bg-white outline-none"
-                                value={editForm.location}
-                                onChange={(e) => setEditForm({...editForm, location: e.target.value})}
-                              >
-                                <option value="">-- No specific location (Abstract/Thought) --</option>
-                                {library.filter(e => e.type === 'location').map(loc => (
-                                  <option key={loc.name} value={loc.name}>{loc.name}</option>
-                                ))}
-                              </select>
-                            </div>
+                           
+                            {s.type === 'event' && (
+                              <>
+                                <div>
+                                  <label className="text-[9px] font-bold uppercase opacity-50 block mb-1">Link Characters</label>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {library.filter(e => e.type === 'character').map(char => {
+                                      const isSelected = editForm.participants.includes(char.name);
+                                      return (
+                                        <button 
+                                          key={char.name}
+                                          onClick={() => toggleParticipant(char.name)}
+                                          className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${isSelected ? 'bg-blue-100 border-blue-300 text-blue-700 font-bold' : 'bg-white border-[#EBEBEB] text-[#37352f]/60 hover:bg-gray-50'}`}
+                                        >
+                                          {char.name}
+                                        </button>
+                                      );
+                                    })}
+                                    {library.filter(e => e.type === 'character').length === 0 && (
+                                      <span className="text-[10px] italic text-gray-400">Library is empty. Commit characters first.</span>
+                                    )}
+                                  </div>
+                                </div>
 
-                        
+                                <div>
+                                  <label className="text-[9px] font-bold uppercase opacity-50 block mb-1">Link Location (Optional)</label>
+                                  <select 
+                                    className="w-full text-[12px] p-1.5 border border-[#EBEBEB] rounded bg-white outline-none"
+                                    value={editForm.location}
+                                    onChange={(e) => setEditForm({...editForm, location: e.target.value})}
+                                  >
+                                    <option value="">-- No specific location (Abstract/Thought) --</option>
+                                    {library.filter(e => e.type === 'location').map(loc => (
+                                      <option key={loc.name} value={loc.name}>{loc.name}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </>
+                            )}
+
                             <div className="flex justify-end pt-1">
-                              <button onClick={() => saveInlineEdit(s.id)} className="flex items-center gap-1 text-[10px] font-bold bg-[#37352f] text-white px-3 py-1.5 rounded hover:bg-black"><Save size={12}/> Save Event</button>
+                              <button onClick={() => saveInlineEdit(s.id)} className="flex items-center gap-1 text-[10px] font-bold bg-[#37352f] text-white px-3 py-1.5 rounded hover:bg-black">
+                                <Save size={12}/> Save {s.type === 'location' ? 'Location' : 'Event'}
+                              </button>
                             </div>
                           </div>
                         ) : (
@@ -298,14 +308,14 @@ export default function App() {
                           </div>
                         )}
                        
-                          {s.type === 'contradiction' && (
-                            <button 
-                              onClick={() => setStaged(staged.filter(x => x.id !== s.id))} 
-                              className="mt-2 text-[10px] font-bold bg-green-100 text-green-700 px-2 py-1 rounded hover:bg-green-200 transition-colors"
-                            >
-                              Mark as Fixed
-                            </button>
-                          )}
+                        {s.type === 'contradiction' && (
+                          <button 
+                            onClick={() => setStaged(staged.filter(x => x.id !== s.id))} 
+                            className="mt-2 text-[10px] font-bold bg-green-100 text-green-700 px-2 py-1 rounded hover:bg-green-200 transition-colors"
+                          >
+                            Mark as Fixed
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -316,8 +326,6 @@ export default function App() {
         )}
 
         {view === 'library' && <WorldLibrary libraryData={library} onRefresh={fetchLibraryData} />}
-
-       
         {view === 'generator' && <Generator libraryData={library} latestText={activeChapter?.content || ""} />}
         
       </div>
